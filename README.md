@@ -1,20 +1,20 @@
 # ROHM BH1745 Color Sensor Demonstration Public Repository
-* Description:  A single board containing all ROHM Sensors with a common platform pin out (standard Arduino header)
+* Description:  Color differentiation demonstration to demonstrate BH1745 sensor capability
 * Developer: USDC Applications Engineering Team, ROHM Semiconductor
-* Date Started: March 2015
-* Related Projects: https://github.com/ROHMUSDC/ROHMSensorPlatformEVK
+* Date Started: June 2015
+* Related Projects: https://github.com/ROHMUSDC/BH1745-Color-Sensor-Demo
 
 ----
 ### Repository Contents
-* NOTE: As of 6-15-2015, this is still a work in progress; but wanted to start the repository.  See "issues" section for work to be done.
-* Documentation Folder: Contains HW PDF files, Sensor Documentation, and Rough Specifications.  Application Note and Platform Guides will be coming soon!
-* HW Source Files: Contains the HW Source OrCad Schematic and Allegro Layout Files for this kit.  Also contains Gerber output. 
-* Platform Code: Contains the firmware for the difference sources this board can be used on.  As of 6-15, this contains work for LAPIS Sensor Platform Board, Arduino, and LPCXpresso54102
+* NOTE: As of 6-15-2015, this is still a work in progress; but wanted to start the repository.  
+* Documentation Folder: Color Samples, Datasheets, Documentation, Firmware
+* HW Source Files: Schematic file can be found in the documentations folder
+* Firmware: Code can be found in "Firmware_BH1745_Color_Demo_15.06.15"
 
 ----
 ### License
 The following are categorized under the GNU General Public License, Version 3:
-* Hardware Design. Includes Schematic, BOM, Layout
+* Hardware Design. Schematic
 * Firmware Design. Includes LAPIS ML610Q112 MCU C code
 
 Copyright (C) 2015 USDC Applications Engineering Team, ROHM Semiconductor
