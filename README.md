@@ -1,4 +1,4 @@
-# ROHM Multi-Sensor Shield Public Repository
+# ROHM BH1745 Color Sensor Demonstration Public Repository
 * Description:  A single board containing all ROHM Sensors with a common platform pin out (standard Arduino header)
 * Developer: USDC Applications Engineering Team, ROHM Semiconductor
 * Date Started: March 2015
