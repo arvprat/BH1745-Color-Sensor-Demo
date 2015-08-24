@@ -1,13 +1,27 @@
 
 //*****************************************************************************
-// Program:	 ROHM Color Sensor Demo Firmware for Q112 Lapis Microcontroller
+// Program:	 ROHM Sensor Platform Firmware for Q112 Lapis Microcontroller
 //		 ROHM Semiconductor USA, LLC
 //		 US Design Center
-// Started:  July 8th, 2015
-// Purpose:	 Firmware for Q112 for BH1745 Color Sensor Demo
+// Started:  July 8th, 2014
+// Purpose:	 Firmware for Q112 for GPS TRACKER 
+// Updated:	 July 8th, 2014
 //*****************************************************************************
 //#define DebugSensor	16
- 
+
+// ============================= GPS TRACKER Board Specs ============================== 
+//	UART to USB/PC:
+//		UART to FTDI => B0, B1
+//		VBus Det => A2
+//	Sensor Interface:
+//		I2C => B5, B6
+//		ADC => A0, A1
+//		GPIO => B2, B3, B4, B7
+//	LED Feedback Section:
+//		LEDs = C0 to C7
+//	Sensor Control Section:
+//		DIP Switch = D0 to D3
+
 //***** PREPROCESSOR DIRECTIVES ***********************************************
 // INCLUDED FILES...
 // Include Path: common;main;irq;timer;clock;tbc;pwm;uart;
@@ -41,7 +55,15 @@
 //===========================================================================
 //   MACROS: 
 //===========================================================================
- 
+#define WelcomeString	("\033[2J\033[1;1H"\
+	"*********************************************\n\r"\
+	"** Q112 Firmware - Sensor Platform EVK\n\r"\
+	"** Revision    : REV00\n\r"\
+	"** Release date: " __DATE__ " " __TIME__ "\n\r"\
+	"** By          : ROHM Semiconductor USA, LLC\n\r"\
+	"*********************************************\n\r"\
+)
+
 #define PRINTF(msg)		write(0, msg, sizeof(msg))
 
 // ===== Peripheral setting.=====
@@ -50,11 +72,12 @@
 
 // SET DESIRED UART SETTINGS HERE! (Options in UART.h)
 //#define UART_BAUDRATE		( UART_BR_115200BPS) 	// Data Bits Per Second - Tested at rates from 2400bps to 512000bps!
-#define UART_BAUDRATE		( UART_BR_19200BPS) 	// Data Bits Per Second - Tested at rates from 2400bps to 512000bps!
+//#define UART_BAUDRATE		( UART_BR_19200BPS) 	// Data Bits Per Second - Tested at rates from 2400bps to 512000bps!
+#define UART_BAUDRATE		( UART_BR_9600BPS) 	// Data Bits Per Second - Tested at rates from 2400bps to 512000bps!
 #define UART_DATA_LENGTH	( UART_LG_8BIT )		// x-Bit Data
-#define UART_PARITY_BIT		( UART_PT_NON )		    // Parity
+#define UART_PARITY_BIT		( UART_PT_NON )		// Parity
 #define UART_STOP_BIT		( UART_STP_1BIT )		// x Stop-Bits
-#define UART_LOGIC		( UART_NEG_POS )		    // Desired Logic
+#define UART_LOGIC		( UART_NEG_POS )		// Desired Logic
 #define UART_DIRECTION		( UART_DIR_LSB )		// LSB or MSB First
 //#define _TBC_H_
 
@@ -159,7 +182,38 @@ union {
 } uniRawSensorOut;
 
 float flSensorOut[3];
-  
+
+/**
+ * ANSI Escape Code
+ */
+#define ESC_SOL			"\r"
+#define ESC_NEWLINE		"\n\r"
+#define ESC_PREVLINE	"\033[F"
+#define ESC_ERASE2END	"\033[J"
+/**
+ * Ambient Light Sensors
+ */ 
+ 
+ 
+static unsigned int 			PWMSafeDuty = 8400;						//Value for Safe Duty = Off, right before starting to spin
+static unsigned int				PWMPeriod = 17000; 						//Value for Period 
+
+ 
+/**
+ * ML8511 (UV Sensor)
+ *		Vout 		: 2.2[V] @ 10[mW/cm2]
+ *		Sensitivity	: 0.129[Vcm2/mW]
+ */
+#define	Voltage2UVIntensity(v)	(v-2.2f)/0.129f+10
+
+/**
+ * Temperature Sensors
+ *		Vout		: v0[V] @ t0[°C]
+ *		Sensitivity	: s[V/°C]
+ */
+#define Voltage2Temperature(v, v0, t0, s)	(v-(v0))/(s)+(t0)
+
+
 const unsigned char BH1745_A			= 0x39u; 
 const unsigned char BH1745_B			= 0x38u; 
 
@@ -179,19 +233,33 @@ const unsigned char GREEN_DATA_MSBs	 		= 0x53u;
  
 const unsigned char BLUE_DATA_LSBs	 		= 0x54u; 
 const unsigned char BLUE_DATA_MSBs	 		= 0x55u; 
-   
+ 
+ 
+
+static unsigned char SensorPlatformSelection;
+static unsigned char SensorIntializationFlag = 1;
+static unsigned char LEDFlashFlag = 0;
+static unsigned char LEDChangeFlag = 0;
+
 static unsigned char			soundNote[2];
-static unsigned char			val[50]; 
+static unsigned char			val[50];//val[800];
 static unsigned char			buffer[120]; 
-static unsigned char			word[88];   
+static unsigned char			word[88]; 
 static unsigned char            temp;
 static unsigned int             flag;
 static unsigned int             checkSum;
 static unsigned int             wordIndex;
 static unsigned int             hexToDecOffset;  
 static unsigned char			NewLineChar[3] = {10,13,0}, lineStr[21];
- 
-static unsigned  int 			i; 
+
+static unsigned int             UTC[3];
+static unsigned char            LatDir, LonDir,LatLonValid, Mode[2];
+static unsigned  int 			i,SV_ID[12];
+static unsigned  int 			j, sigDigits;
+static long double 				Latitude, Longitude,HDOP,PDOP,VDOP,MSL,Geoid;
+static unsigned int 			fixQuality,numSat,isNeg;
+static unsigned int				GSV_numMessage,GSV_index,numSat,PRN_num,Eleveation,Azimuth,SNR,GSV_Info[12];
+  
 static long double				prevBulbIntensity;
 static unsigned int             bulbIntensity, bulbEnable;
 
@@ -229,6 +297,7 @@ int filter_flag;
 static unsigned char	 singleChar[1],buffer[120],line1[21],line2[20],line3[15],line4[20];
 static int b,c;
 static long double a, configH, configS,configL,  HL,HH,SL,SH,LL,LH,  colorTolerance, prev_hsl_ave, deltaHSL;
+static long double   GAIN, lx, lx_tmp, B_eff,R_ratio,CCT,B_ratio, greenThresh;
 
 static float tempH,tempS,tempL, tolH, tolS, tolL;
 
@@ -240,8 +309,12 @@ int cmpfunc (const void * a, const void * b);
 void f_sort(int* a, int n );
 static int tolerance = 1;
 const unsigned char sensor_addr[2] = { 0x38u, 0x39u};
+const unsigned char homeCurser[2] = { 0x81u,  0x00u};
 void rgb_2_hsl();
 void hsl_load(void);
+void curserReset(int rewindSize);
+void IlluminanceCalc();
+void ColorTemperature();
 #define MAX(a,b)		(((a) > (b) ) ? (a) : (b) )
 #define MIN(a,b)		(((a) < (b) ) ? (a) : (b) )
 
@@ -252,10 +325,20 @@ int main(void)
 { 	 
 	Initialization(); //Ports, UART, Timers, Oscillator, Comparators, etc.
     colorTolerance = 0.002;
-	 
+	
+	/*
+	for(i=0;i<5;i++){
+	for(i=0;i<5;i++){
+		main_clrWDT(); 
+		NOPms(30); 
+		FlashLEDs();
+	} 
+	*/
+	
 	PB3D = 0; // RGB Sensor ADDR
 	PD5D = 1; // RGB Sensor ADDR
-	  
+	 
+	
 	temp = 0x03u;
 	I2C_Write(0x38u, &PERSISTENCE, 1, &temp, 1); 
 	I2C_Write(0x39u, &PERSISTENCE, 1, &temp, 1); 
@@ -264,48 +347,98 @@ int main(void)
 	I2C_Write(0x39u, &MODE_CONTROL1, 1, &temp, 1); 
 	temp = 0x92u;
 	I2C_Write(0x38u, &MODE_CONTROL2, 1, &temp, 1); 
-	I2C_Write(0x39u, &MODE_CONTROL2, 1, &temp, 1);  //16x gain, RGBC_EN
+	I2C_Write(0x39u, &MODE_CONTROL2, 1, &temp, 1); //16x gain, RGBC_EN
 	temp = 0x02u;
 	I2C_Write(0x38u, &MODE_CONTROL3, 1, &temp, 1); 
 	I2C_Write(0x39u, &MODE_CONTROL3, 1, &temp, 1); 
-	 
+	FlashLEDs();
+	/*
 	FlashLEDs();
 	FlashLEDs();
 	FlashLEDs();		
 	FlashLEDs(); 
 	RGB_OFF();					
-	
+	*/
 	LED_ON();				//turn ON
-	    
+    GAIN = 1.0;
+	greenThresh = 100.0;
 	for(i=0;i<80;i++){
 		buffer[i] = 0;
 		main_clrWDT(); 
-	}
-
-	bufferSize = sprintf(line1 ,"%c<Color Sensor Demo>",128); 
-	bufferSize += sprintf(line2,  "    CHOOSE A COLOR  ");  
-	
-	strcat(buffer,line1);
-	strcat(buffer,line2);
-	for(i=45;i<85;i++){
-		buffer[i] = 0;
-	}  
-	write(0,buffer,bufferSize); 
-		
+	} 
+	    
+		main_clrWDT();  
+		bufferSize = sprintf(line1 ,"Color Sensor    Demo - BH1745   ");
+		write(0,line1,bufferSize); 
+		  
+		curserReset(bufferSize); 
+		 
+		FlashLEDs(); 
+		FlashLEDs(); 
+		  
 	deltaHSL = 10; 
 	//hsl_load();
-	while(1){ 		 
+	LED_ON();
+	while(1){ 		  
 		main_clrWDT(); 
-		RGB_dataacq();	 
-		main_clrWDT(); 
+		RGB_dataacq();	  
 			 
-		PrintToScreen();  
-	}
-		
+			IlluminanceCalc();
+			ColorTemperature();
+			  
+			
+			main_clrWDT(); 
+			bufferSize = sprintf(line1,"LUX: %09.3f  CCT: %09.3f  ",lx,CCT);   
+			write(0,line1,bufferSize);  
+			 
+			curserReset(bufferSize);  
+	} 
 }
 //===========================================================================
 //  	End of MAIN FUNCTION
 //===========================================================================
+
+void ColorTemperature(){
+	main_clrWDT();  
+	if ((rawG < greenThresh) || (rawR + rawG + rawB < greenThresh)){
+		CCT=0;
+	}
+	else{
+		R_ratio = rawR / (double)(rawR + rawG + rawB);
+		B_ratio = rawB / (double)(rawR + rawG + rawB);
+		
+		if ((double)(rawC/rawG) < 0.160){
+			B_eff = MIN(B_ratio*3.13, 1);
+			CCT = (1 - B_eff) * 12746 * exp(-2.911 * R_ratio) + B_eff * 1637 * exp(4.865 * B_ratio);
+		}
+		else{
+			B_eff = MIN(B_ratio*10.67, 1);
+			CCT = (1 - B_eff) * 16234 * exp(-2.781 * R_ratio) + B_eff * 1882 * exp(4.448 * B_ratio);
+		}
+		if (CCT > 10000) 
+			CCT = 10000;
+	}
+}
+
+void IlluminanceCalc(){
+	main_clrWDT();  
+	if (rawG < greenThresh)
+		lx_tmp = 0;
+	else if (rawC/rawG < 0.160)
+		lx_tmp = 0.202 * rawR + 0.766 * rawG;
+	else
+		lx_tmp = 0.159 * rawR + 0.646 * rawG;
+	lx = lx_tmp * GAIN; 
+}
+
+void curserReset(int rewindSize){
+		for(;rewindSize==0;rewindSize--)
+		{
+			main_clrWDT(); 
+			write(0,0x10,1); 
+		}
+}
+
 void f_sort(int* a, int n )
 {
 	//bubble sort
@@ -331,7 +464,8 @@ void f_sort(int* a, int n )
 void rgb_2_hsl()
 {
 	float fmax, fmin, fdel;		
-	 
+	
+	
 	    main_clrWDT(); 
 	fmax = MAX( MAX(rgb_avg.R,rgb_avg.G), rgb_avg.B);
 	fmin = MIN( MIN(rgb_avg.R,rgb_avg.G), rgb_avg.B);
@@ -370,7 +504,6 @@ void rgb_2_hsl()
 		hsl_avg.H /= 6;
 	}
 }
-
 void RGB_dataacq(void)
 {	
     main_clrWDT(); 
@@ -546,7 +679,10 @@ void hsl_load()
 	 
 	hsl_colors[i].hue =		1.524513859;
 	hsl_colors[i].sat =		0.870595585;
-	hsl_colors[i].lum =		0.017923247; 
+	hsl_colors[i].lum =		0.017923247;
+	
+
+	
 }
 
 void hsl_filter_average()
@@ -559,7 +695,9 @@ void hsl_filter_average()
 	filter_flag++;
 	
 }
- 
+
+
+
 void RUN_COLOR_DETECTION(void){  
 	/*
 		White paper = Program Starts over
@@ -728,7 +866,176 @@ void RUN_COLOR_DETECTION(void){
 			filter_hsl.L=0;
 		} 
 }
- 
+
+void GuessingGame(){ 
+	/*
+		White paper = Program Starts over
+		Program 1) scan first color to be compared (msg: "Please scan the first color)
+				2) scann the same color (msg: "Please find the matching color)
+				3) Display result (msg1: "Correct Color Selected!")
+								  (msg2: "The correct color is 'X'")
+		Design guide:   Only scan when color is not fluxuating (ie. moving around)
+	*/
+	main_clrWDT(); 
+	//initialize to zero
+	hsl_avg.H = 0;
+	hsl_avg.S = 0;
+	hsl_avg.L = 0;
+	
+	rgb_2_hsl();	
+		/*
+		for(i=0;i<80;i++){
+			main_clrWDT(); 
+			buffer[i] = 0;
+		} */
+		 
+		hsl_filter_average();
+		
+		if(filter_flag  == sumMax-1 ){
+			main_clrWDT(); 
+			hsl_avg.H = filter_hsl.H/sumMax;
+			hsl_avg.S = filter_hsl.S/sumMax;
+			hsl_avg.L = filter_hsl.L/sumMax; 
+			//******************************************************************************************** 
+			
+			//bufferSize = sprintf(buffer,"%c%cH%5.3f S%5.3f L%5.3f",128,221,hsl_avg.H,hsl_avg.S,hsl_avg.L);  
+			bufferSize = sprintf(buffer,"%cH%5.3f S%5.3f L%5.3f",128,hsl_avg.H,hsl_avg.S,hsl_avg.L);  
+			wordSize = bufferSize; 
+			  
+			/*
+			//********************************* KINKO PRINTS ******************************************* 
+			configH = 1.014;
+			configS = 0.565;
+			configL = 0.010;
+			if(( (configH-colorTolerance) < hsl_avg.H && hsl_avg.H < (configH+colorTolerance) ) && ( (configS-colorTolerance) < hsl_avg.S  && hsl_avg.S  < (configS+colorTolerance) ) && ( (configL-colorTolerance) < hsl_avg.L  && hsl_avg.L  < (configL+colorTolerance) ))
+			{
+				
+				bufferSize = sprintf(line4,"RED A  "); 
+			}  
+			configH = 1.012;
+			configS = 0.550;
+			configL = 0.011;
+			if(( (configH-colorTolerance) < hsl_avg.H && hsl_avg.H < (configH+colorTolerance) ) && ( (configS-colorTolerance) < hsl_avg.S  && hsl_avg.S  < (configS+colorTolerance) ) && ( (configL-colorTolerance) < hsl_avg.L  && hsl_avg.L  < (configL+colorTolerance) ))
+			{
+				
+				bufferSize = sprintf(line4,"RED B  "); 
+			}  
+			configH = 1.012;
+			configS = 0.545;
+			configL = 0.011;
+			if(( (configH-colorTolerance) < hsl_avg.H && hsl_avg.H < (configH+colorTolerance) ) && ( (configS-colorTolerance) < hsl_avg.S  && hsl_avg.S  < (configS+colorTolerance) ) && ( (configL-colorTolerance) < hsl_avg.L  && hsl_avg.L  < (configL+colorTolerance) ))
+			{
+				
+				bufferSize = sprintf(line4,"RED C  "); 
+			}  
+			configH = 1.016;
+			configS = 0.538;
+			configL = 0.012;
+			if(( (configH-colorTolerance) < hsl_avg.H && hsl_avg.H < (configH+colorTolerance) ) && ( (configS-colorTolerance) < hsl_avg.S  && hsl_avg.S  < (configS+colorTolerance) ) && ( (configL-colorTolerance) < hsl_avg.L  && hsl_avg.L  < (configL+colorTolerance) ))
+			{
+				
+				bufferSize = sprintf(line4,"RED D  "); 
+			}  
+			
+			configH = 0.478;
+			configS = 0.535;
+			configL = 0.006;
+			if(( (configH-colorTolerance) < hsl_avg.H && hsl_avg.H < (configH+colorTolerance) ) && ( (configS-colorTolerance) < hsl_avg.S  && hsl_avg.S  < (configS+colorTolerance) ) && ( (configL-colorTolerance) < hsl_avg.L  && hsl_avg.L  < (configL+colorTolerance) ))
+			{
+				
+				bufferSize = sprintf(line4,"Blue A  "); 
+			}   
+			configH = 0.485;
+			configS = 0.558;
+			configL = 0.007;
+			if(( (configH-colorTolerance) < hsl_avg.H && hsl_avg.H < (configH+colorTolerance) ) && ( (configS-colorTolerance) < hsl_avg.S  && hsl_avg.S  < (configS+colorTolerance) ) && ( (configL-colorTolerance) < hsl_avg.L  && hsl_avg.L  < (configL+colorTolerance) ))
+			{
+				
+				bufferSize = sprintf(line4,"Blue B  "); 
+			}   
+			configH = 0.485;
+			configS = 0.576;
+			configL = 0.007;
+			if(( (configH-colorTolerance) < hsl_avg.H && hsl_avg.H < (configH+colorTolerance) ) && ( (configS-colorTolerance) < hsl_avg.S  && hsl_avg.S  < (configS+colorTolerance) ) && ( (configL-colorTolerance) < hsl_avg.L  && hsl_avg.L  < (configL+colorTolerance) ))
+			{
+				
+				bufferSize = sprintf(line4,"Blue C  "); 
+			}   
+			configH = 0.486;
+			configS = 0.595;
+			configL = 0.008;
+			if(( (configH-colorTolerance) < hsl_avg.H && hsl_avg.H < (configH+colorTolerance) ) && ( (configS-colorTolerance) < hsl_avg.S  && hsl_avg.S  < (configS+colorTolerance) ) && ( (configL-colorTolerance) < hsl_avg.L  && hsl_avg.L  < (configL+colorTolerance) ))
+			{
+				
+				bufferSize = sprintf(line4,"Blue D  "); 
+			}   
+			
+			configH = 0.320;
+			configS = 0.606;
+			configL = 0.014;
+			if(( (configH-colorTolerance) < hsl_avg.H && hsl_avg.H < (configH+colorTolerance) ) && ( (configS-colorTolerance) < hsl_avg.S  && hsl_avg.S  < (configS+colorTolerance) ) && ( (configL-colorTolerance) < hsl_avg.L  && hsl_avg.L  < (configL+colorTolerance) ))
+			{
+				
+				bufferSize = sprintf(line4,"Green A  "); 
+			}   
+			configH = 0.322;
+			configS = 0.617;
+			configL = 0.014;
+			if(( (configH-colorTolerance) < hsl_avg.H && hsl_avg.H < (configH+colorTolerance) ) && ( (configS-colorTolerance) < hsl_avg.S  && hsl_avg.S  < (configS+colorTolerance) ) && ( (configL-colorTolerance) < hsl_avg.L  && hsl_avg.L  < (configL+colorTolerance) ))
+			{
+				
+				bufferSize = sprintf(line4,"Green B  "); 
+			}   
+			configH = 0.325;
+			configS = 0.620;
+			configL = 0.015;
+			if(( (configH-colorTolerance) < hsl_avg.H && hsl_avg.H < (configH+colorTolerance) ) && ( (configS-colorTolerance) < hsl_avg.S  && hsl_avg.S  < (configS+colorTolerance) ) && ( (configL-colorTolerance) < hsl_avg.L  && hsl_avg.L  < (configL+colorTolerance) ))
+			{
+				
+				bufferSize = sprintf(line4,"Green C  "); 
+			}   
+			configH = 0.329;
+			configS = 0.604;
+			configL = 0.018;
+			if(( (configH-colorTolerance) < hsl_avg.H && hsl_avg.H < (configH+colorTolerance) ) && ( (configS-colorTolerance) < hsl_avg.S  && hsl_avg.S  < (configS+colorTolerance) ) && ( (configL-colorTolerance) < hsl_avg.L  && hsl_avg.L  < (configL+colorTolerance) ))
+			{
+				
+				bufferSize = sprintf(line4,"Green D  "); 
+			}   
+			//******************************************************************************************
+			*/
+			
+			wordSize += bufferSize;
+			//NOPms(10);
+			checkSum = strcmp(lineStr,line4); 
+			//if(checkSum){
+				//GuessingGame();
+				strcat(line4,NewLineChar); // *** ONLY WHEN PRINTING TO PC SCREEN ***
+					
+				strcat(buffer,line4);
+				//strcat(buffer,line4); 
+				//strcat(buffer,line2); 
+				//strcat(buffer,line3); 
+				
+					
+				for(wordSize;wordSize< 41;wordSize++){
+					buffer[wordSize] = ' ';
+				}
+				buffer[wordSize] = 0; 
+				
+				write(0,buffer,wordSize);  
+			//}
+			
+			strcpy(lineStr,line4);
+			
+			filter_flag = 0;  
+  
+			filter_hsl.H=0;
+			filter_hsl.S=0;
+			filter_hsl.L=0;
+		} 
+}
+
 double getABS(long double a){
 	if(a>0)
 		return a;
@@ -817,7 +1124,7 @@ void PrintToScreen(void){
 			tempS = hsl_avg.S;
 			tempL = hsl_avg.L;
 			main_clrWDT(); 
-			bufferSize = sprintf(line1,"%cH%5.3f S%5.3f L%5.3f",128,hsl_avg.H,hsl_avg.S,hsl_avg.L);  
+			bufferSize = sprintf(line1,"%cH%5.3f S%5.3f L%5.3f",128,hsl_avg.H,hsl_avg.S,hsl_avg.L);   
 			bufferSize += sprintf(line2,"Scan WHT to continue");  
 			
 			strcat(buffer,line1);
